@@ -2,6 +2,8 @@
 
 Chrome 插件（Manifest V3）。扫描**自己**的B站动态，把转发过的抽奖动态按状态分类，预览确认后批量删除。
 
+<p align="center"><img src="docs/screenshot.png" width="560" alt="面板截图：扫描结果按已开奖 / 未开奖等状态打标签"></p>
+
 ## 安装（加载已解压的扩展程序）
 
 1. Chrome 地址栏打开 `chrome://extensions/`
