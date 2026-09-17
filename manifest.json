@@ -1,0 +1,23 @@
+{
+  "manifest_version": 3,
+  "name": "B站已开奖动态清理",
+  "version": "1.0.0",
+  "description": "扫描自己的B站动态，找出转发过的已开奖 / 源动态已删除的抽奖动态，预览确认后批量删除。",
+  "icons": { "16": "icons/16.png", "48": "icons/48.png", "128": "icons/128.png" },
+  "action": {
+    "default_title": "B站已开奖动态清理（点击打开面板）",
+    "default_icon": { "16": "icons/16.png", "48": "icons/48.png", "128": "icons/128.png" }
+  },
+  "background": { "service_worker": "background.js" },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://space.bilibili.com/*",
+        "https://t.bilibili.com/*",
+        "https://www.bilibili.com/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
