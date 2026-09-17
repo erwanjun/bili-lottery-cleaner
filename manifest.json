@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "B站已开奖动态清理",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "扫描自己的B站动态，找出转发过的已开奖 / 源动态已删除的抽奖动态，预览确认后批量删除。",
   "icons": { "16": "icons/16.png", "48": "icons/48.png", "128": "icons/128.png" },
   "action": {

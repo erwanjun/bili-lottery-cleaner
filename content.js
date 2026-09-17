@@ -14,6 +14,7 @@
   const API = {
     nav: 'https://api.bilibili.com/x/web-interface/nav',
     space: 'https://api.bilibili.com/x/polymer/web-dynamic/v1/feed/space',
+    detail: 'https://api.bilibili.com/x/polymer/web-dynamic/v1/detail',
     lottery: 'https://api.vc.bilibili.com/lottery_svr/v1/lottery_svr/lottery_notice',
     removeNew: 'https://api.bilibili.com/x/dynamic/feed/operate/remove',
     removeOld: 'https://api.vc.bilibili.com/dynamic_svr/v1/dynamic_svr/rm_dynamic',
@@ -36,7 +37,7 @@
   const state = {
     mid: 0, uname: '', csrf: '',
     scanning: false, deleting: false, abort: false,
-    scanned: 0, forwards: 0,
+    scanned: 0, forwards: 0, folded: 0,
     results: [],            // 扫描结果，见 analyzeForward()
     lotteryCache: new Map() // businessType:businessId -> 查询结果
   };
@@ -116,6 +117,14 @@
       offset = d.offset;
       await sleep(settings.delay);
     }
+  }
+
+  async function fetchDetail(id) {
+    const j = await getJSON(API.detail, {
+      id, features: FEATURES, platform: 'web', timezone_offset: -480, web_location: '333.1368',
+    });
+    if (j.code !== 0 || !j.data?.item) throw new Error(`动态 ${id} 详情失败: ${j.code} ${j.message || ''}`);
+    return j.data.item;
   }
 
   // 从 additional 卡片里递归找 lottery/result?business_id=..&business_type=.. 这种链接（预约抽奖、充电抽奖）
@@ -415,10 +424,34 @@
   }
 
   // ---------- 扫描 ----------
+  async function processItem(item) {
+    state.scanned++;
+    if (item.type !== 'DYNAMIC_TYPE_FORWARD') return;
+    state.forwards++;
+    const info = analyzeForward(item);
+    if (!info) return;
+    if (info.lotteries.length) {
+      const rs = [];
+      for (const l of info.lotteries) {
+        rs.push(await checkLottery(l));
+        await sleep(Math.max(150, settings.delay / 2));
+      }
+      // 多个抽奖时取「最不该删」的状态：未开奖 > 未知 > 已过期 > 已开奖
+      const order = ['pending', 'unknown', 'expired', 'drawn'];
+      rs.sort((a, b) => order.indexOf(a.state) - order.indexOf(b.state));
+      const top = rs[0];
+      info.state = top.state;
+      info.lotteryTime = top.lotteryTime || 0;
+      info.prize = top.prize || '';
+      info.note = top.note || '';
+    }
+    if (info.state !== 'suspect' || settings.includeSuspect) addResult(info);
+  }
+
   async function scan() {
     if (state.scanning || state.deleting) return;
     state.scanning = true; state.abort = false;
-    state.scanned = 0; state.forwards = 0; state.results = [];
+    state.scanned = 0; state.forwards = 0; state.folded = 0; state.results = [];
     el.list.innerHTML = '<div class="empty">扫描中…</div>';
     el.sum.innerHTML = '';
     setBusy();
@@ -426,37 +459,40 @@
       await loadAccount();
       el.acct.textContent = `${state.uname} (${state.mid})`;
       log(`账号 ${state.uname} (${state.mid})，开始扫描`);
-      const progress = () => setStatus(`已扫描 ${state.scanned} 条动态（其中转发 ${state.forwards} 条），命中 ${state.results.length} 条`);
+      const progress = () => setStatus(`已扫描 ${state.scanned} 条动态（转发 ${state.forwards} 条，其中折叠展开 ${state.folded} 条），命中 ${state.results.length} 条`);
+      const seen = new Set();
+      const limitHit = () => settings.limit && state.scanned >= settings.limit;
+      outer:
       for await (const item of iterateSpace(state.mid)) {
         if (state.abort) break;
-        state.scanned++;
-        if (item.type === 'DYNAMIC_TYPE_FORWARD') {
-          state.forwards++;
-          const info = analyzeForward(item);
-          if (info) {
-            if (info.lotteries.length) {
-              const rs = [];
-              for (const l of info.lotteries) {
-                rs.push(await checkLottery(l));
-                await sleep(Math.max(150, settings.delay / 2));
-              }
-              // 多个抽奖时取「最不该删」的状态：未开奖 > 未知 > 已过期 > 已开奖
-              const order = ['pending', 'unknown', 'expired', 'drawn'];
-              rs.sort((a, b) => order.indexOf(a.state) - order.indexOf(b.state));
-              const top = rs[0];
-              info.state = top.state;
-              info.lotteryTime = top.lotteryTime || 0;
-              info.prize = top.prize || '';
-              info.note = top.note || '';
-            }
-            if (info.state !== 'suspect' || settings.includeSuspect) addResult(info);
-          }
-        }
+        if (seen.has(item.id_str)) continue;
+        seen.add(item.id_str);
+        await processItem(item);
         progress();
-        if (settings.limit && state.scanned >= settings.limit) { log(`达到扫描上限 ${settings.limit}`); break; }
+        if (limitHit()) break;
+
+        // B站会把短时间内连续转发的抽奖折叠成「展开N条相关动态」，列表里只给 id，要逐条拉详情
+        const foldIds = (item.modules?.module_fold?.ids || []).map(String).filter(id => id && !seen.has(id));
+        if (foldIds.length) log(`动态 ${item.id_str} 折叠了 ${foldIds.length} 条，逐条展开`);
+        for (const id of foldIds) {
+          if (state.abort) break outer;
+          seen.add(id);
+          await sleep(settings.delay);
+          try {
+            const sub = await fetchDetail(id);
+            state.folded++;
+            await processItem(sub);
+          } catch (e) {
+            if (/风控|未登录/.test(e.message)) throw e;
+            log(`展开失败 ${id}: ${e.message}`);
+          }
+          progress();
+          if (limitHit()) break outer;
+        }
       }
+      if (limitHit()) log(`达到扫描上限 ${settings.limit}`);
       const c = k => state.results.filter(r => r.state === k).length;
-      setStatus(`${state.abort ? '已停止' : '扫描完成'}：共 ${state.scanned} 条动态，转发 ${state.forwards} 条；已开奖 ${c('drawn')}，源已删 ${c('deleted')}，已过期 ${c('expired')}，未开奖 ${c('pending')}，未知 ${c('unknown')}，疑似 ${c('suspect')}`);
+      setStatus(`${state.abort ? '已停止' : '扫描完成'}：共 ${state.scanned} 条动态，转发 ${state.forwards} 条（折叠展开 ${state.folded} 条）；已开奖 ${c('drawn')}，源已删 ${c('deleted')}，已过期 ${c('expired')}，未开奖 ${c('pending')}，未知 ${c('unknown')}，疑似 ${c('suspect')}`);
       if (!state.results.length) el.list.innerHTML = '<div class="empty">没有找到可清理的动态 🎉</div>';
       log('扫描结束');
     } catch (e) {

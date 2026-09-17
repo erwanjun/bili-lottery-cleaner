@@ -36,6 +36,7 @@ Chrome 插件（Manifest V3）。扫描**自己**的B站动态，把转发过的
 ## 判定逻辑
 
 - 动态列表：`api.bilibili.com/x/polymer/web-dynamic/v1/feed/space`，只看 `DYNAMIC_TYPE_FORWARD`
+- 折叠展开：B站会把短时间内连续转发的抽奖折叠成「展开N条相关动态」，列表里只给 `module_fold.ids`，会逐条调 `web-dynamic/v1/detail` 拉出来一起判定
 - 抽奖识别：原动态富文本里的 `RICH_TEXT_NODE_TYPE_LOTTERY` 节点（互动抽奖，business_type=1）；附加卡片里 `lottery/result?business_id=…&business_type=…` 链接（预约抽奖 10 / 充电抽奖 12）
 - 开奖状态：`api.vc.bilibili.com/lottery_svr/v1/lottery_svr/lottery_notice`，`status === 2` 或有 `lottery_result` 视为已开奖
 - 删除：`api.bilibili.com/x/dynamic/feed/operate/remove`（JSON），失败时退回旧接口 `dynamic_svr/rm_dynamic`
